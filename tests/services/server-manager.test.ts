@@ -17,6 +17,7 @@ jest.mock('@/services/api/client', () => ({
     getServer: jest.fn(),
     setServer: jest.fn(),
     setApiVersion: jest.fn(),
+    abortInFlight: jest.fn(),
   },
 }));
 
@@ -375,6 +376,17 @@ describe('ServerManager', () => {
       );
       await ServerManager.disconnect();
       expect(mockAuth.logout).not.toHaveBeenCalled();
+      expect(mockApiClient.setServer).toHaveBeenCalledWith(null);
+    });
+
+    it('disconnect cancels in-flight requests instead of waiting out a hung logout (#254)', async () => {
+      mockApiClient.getServer.mockReturnValue(makeServer());
+      // A logout that never resolves — simulates an unreachable server. If
+      // disconnect() awaited it directly (instead of firing it and calling
+      // abortInFlight()), this test would hang.
+      mockAuth.logout.mockReturnValueOnce(new Promise(() => {}));
+      await ServerManager.disconnect();
+      expect(mockApiClient.abortInFlight).toHaveBeenCalled();
       expect(mockApiClient.setServer).toHaveBeenCalledWith(null);
     });
 
