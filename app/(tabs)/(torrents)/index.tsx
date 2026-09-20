@@ -1117,7 +1117,15 @@ export default function TorrentsScreen() {
   // connection (check this FIRST). currentServer intentionally survives a
   // disconnect for one-tap reconnect, so it must NOT gate this screen —
   // otherwise a disconnected app falls through to the empty torrent list.
-  if (!isConnected && !serverIsLoading) {
+  //
+  // `connectingId !== null` keeps this panel mounted through a user-initiated
+  // tap (#252): the moment handleQuickConnect fires, connectMutation goes
+  // pending and serverIsLoading flips true, which would otherwise fall through
+  // to the skeleton branch below and unmount the panel mid-tap — panel →
+  // skeleton → panel in a frame (or ~10s on a real network), i.e. the blink.
+  // An automatic background reconnect leaves connectingId null, so it still
+  // falls through to the skeleton as before.
+  if (!isConnected && (!serverIsLoading || connectingId !== null)) {
     return (
       <QuickConnectPanel
         savedServers={savedServers}
