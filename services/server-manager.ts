@@ -329,11 +329,14 @@ export class ServerManager {
     // API-key auth is stateless and the login/logout endpoints reject Bearer
     // keys outright, so there's no session to end.
     if (previousServer && getServerAuthMode(previousServer) !== 'apiKey') {
-      try {
-        await authApi.logout();
-      } catch {
+      // Best-effort logout — fire it, but don't await it. Against an
+      // unreachable server this used to make disconnect() wait out the
+      // logout POST's own timeout before returning; abortInFlight() below
+      // cancels it immediately instead (#254). Errors (including the
+      // cancellation itself) are ignored either way — logout is best-effort.
+      authApi.logout().catch(() => {
         // Ignore logout errors
-      }
+      });
     }
     clogInfo(
       'CONN',
@@ -341,6 +344,10 @@ export class ServerManager {
         ? `Disconnecting from ${previousServer.host}:${previousServer.port || 'default'} (user requested)`
         : 'Disconnect requested (no server was connected)',
     );
+    // Cancel the logout above plus any other in-flight requests (e.g. the
+    // torrent/transfer polls) so disconnect returns promptly and nothing
+    // lands after the fact (#254).
+    apiClient.abortInFlight();
     apiClient.setServer(null);
     // Keep currentServerId so Settings can offer one-tap reconnect to the
     // last server, and so auto-connect-last-server still has a target — but
