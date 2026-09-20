@@ -4,9 +4,9 @@
  * folder nodes (plain nested objects) at any depth. Paths are joined with
  * `\` per qBittorrent's own convention (addFolder/addFeed/moveItem params).
  *
- * Key exports: isRssFeed, flattenRssTree, joinRssPath, parentRssPath, rssPathBaseName, toSearchQuery
+ * Key exports: isRssFeed, flattenRssTree, joinRssPath, parentRssPath, rssPathBaseName, toSearchQuery, sortArticlesByDateDesc
  */
-import { RssFeed, RssItemsResponse, RssTreeNode } from '@/types/api';
+import { RssArticle, RssFeed, RssItemsResponse, RssTreeNode } from '@/types/api';
 
 export function isRssFeed(node: RssTreeNode): node is RssFeed {
   return typeof (node as RssFeed).url === 'string';
@@ -71,4 +71,27 @@ export function toSearchQuery(title: string): string {
     .replace(/\s*[([][^)\]]*[)\]]\s*/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function parseArticleTime(raw?: string): number | null {
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
+}
+
+/**
+ * Sorts RSS articles newest first. Articles with a missing or unparseable
+ * `date` sort last, keeping their original relative order (Array.sort is
+ * stable) rather than shuffling a feed that has no dates at all. Returns a
+ * new array — the input often comes straight off cached query data.
+ */
+export function sortArticlesByDateDesc(articles: RssArticle[]): RssArticle[] {
+  return [...articles].sort((a, b) => {
+    const timeA = parseArticleTime(a.date);
+    const timeB = parseArticleTime(b.date);
+    if (timeA === null && timeB === null) return 0;
+    if (timeA === null) return 1;
+    if (timeB === null) return -1;
+    return timeB - timeA;
+  });
 }
