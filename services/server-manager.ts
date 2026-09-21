@@ -14,7 +14,10 @@ import { apiClient } from './api/client';
 import { authApi } from './api/auth';
 import { applicationApi } from './api/application';
 import { clogInfo, clogWarn, clogError } from './connectivity-log';
-import { setInsecureCertAllowedHosts } from '@/modules/insecure-cert-allowlist';
+import {
+  setInsecureCertAllowedHosts,
+  isInsecureCertAllowlistAvailable,
+} from '@/modules/insecure-cert-allowlist';
 
 /**
  * Pushes every host opted into `allowInsecureCert` to the native TLS
@@ -23,8 +26,18 @@ import { setInsecureCertAllowedHosts } from '@/modules/insecure-cert-allowlist';
  * change before the next connection attempt.
  */
 function syncInsecureCertAllowlist(servers: ServerConfig[]): void {
-  const hosts = servers
-    .filter((s) => s.allowInsecureCert)
+  const wantAllowlist = servers.filter((s) => s.allowInsecureCert);
+  // A server can have this flag set while the native module is absent from
+  // the running binary (OTA JS on a pre-#256 binary — see
+  // modules/insecure-cert-allowlist/index.ts). The toggle silently no-ops in
+  // that case; warn so a connection failure doesn't look unexplained.
+  if (wantAllowlist.length > 0 && !isInsecureCertAllowlistAvailable()) {
+    clogWarn(
+      'CERT',
+      `${wantAllowlist.length} server(s) have "Allow Untrusted, Self-Signed Certificate" enabled, but this build has no native allowlist module — the toggle will not take effect until the app is updated from the App Store.`,
+    );
+  }
+  const hosts = wantAllowlist
     .flatMap((s) => [s.host, s.fallbackHost])
     .filter((h): h is string => !!h);
   setInsecureCertAllowedHosts(hosts);

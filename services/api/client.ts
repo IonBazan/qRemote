@@ -7,6 +7,7 @@ import axios, { AxiosInstance, AxiosError, AxiosHeaders, InternalAxiosRequestCon
 import { ServerConfig } from '@/types/api';
 import { clogDebug, clogInfo, clogWarn, clogError } from '@/services/connectivity-log';
 import { ApiFeatures, getApiFeatures } from '@/utils/apiVersion';
+import { isTlsRejection } from '@/utils/error';
 import { basicAuthHeader } from '@/utils/basicAuth';
 import { isReservedHeaderName } from '@/utils/customHeaders';
 
@@ -243,6 +244,21 @@ class ApiClient {
 
         // Handle network errors
         if (error.code === 'ECONNABORTED' || error.code === 'ERR_NETWORK') {
+          // iOS's TLS-certificate rejection (NSURLErrorServerCertificateUntrusted,
+          // -1202, and friends) surfaces here too — as a plain ERR_NETWORK with
+          // no distinguishing code (#256). Without this, a rejected self-signed
+          // certificate is indistinguishable from a genuinely dead server, so
+          // nobody can tell what's wrong from the app alone. isTlsRejection reads
+          // the native error description RN stashes on the XHR (see utils/error.ts)
+          // to tell the two apart. This is a *new*, separate message — do not fold
+          // it into 'Connection timeout...' below, which callers substring-match.
+          if (isTlsRejection(error)) {
+            clogWarn('TLS', `Certificate rejected — ${reqUrl}`);
+            throw apiError(
+              'Certificate rejected. Enable "Allow Untrusted, Self-Signed Certificate" for this server if you trust it.',
+              status,
+            );
+          }
           clogError('HTTP', `Network error (${error.code}) — ${reqUrl}`);
           throw apiError('Connection timeout. Please check your server connection.', status);
         }

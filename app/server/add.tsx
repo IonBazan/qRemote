@@ -46,6 +46,7 @@ import {
   sanitizeCustomHeaders,
   validateCustomHeaders,
 } from '@/utils/customHeaders';
+import { isInsecureCertAllowlistAvailable } from '@/modules/insecure-cert-allowlist';
 
 export default function AddServerScreen() {
   const router = useRouter();
@@ -810,6 +811,11 @@ App Version: ${APP_VERSION}`;
                   <Text style={[styles.hintText, { color: colors.textSecondary }]}>
                     {t('server.allowInsecureCertHint')}
                   </Text>
+                  {!isInsecureCertAllowlistAvailable() && (
+                    <Text style={[styles.hintText, { color: colors.warning }]}>
+                      {t('server.allowInsecureCertUnavailable')}
+                    </Text>
+                  )}
                 </>
               )}
             </View>

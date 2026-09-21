@@ -800,6 +800,7 @@
     "useHttps": "Use HTTPS",
     "allowInsecureCert": "Allow Untrusted, Self-Signed Certificate",
     "allowInsecureCertHint": "Accepts this server's certificate even if iOS does not trust it. Only enable this for a server you control — it removes protection against a spoofed or intercepted connection.",
+    "allowInsecureCertUnavailable": "Requires the latest App Store version.",
     "authMethod": "Authentication Method",
     "authMethodPassword": "Username & Password",
     "authMethodApiKey": "API Key",
