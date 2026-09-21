@@ -491,7 +491,13 @@ Thin objects over `apiClient`.
   `services/server-manager.ts`); every other host and every non-server-trust
   challenge (Basic Auth, client cert) falls through to default handling
   unchanged. iOS only; requires `npm run xcode` to pick up (new native code,
-  not just a generated-file patch).
+  not just a generated-file patch). `isInsecureCertAllowlistAvailable()` (#256)
+  reports whether the native side is actually present in the running binary —
+  see [§10 Gotchas](#10-gotchas) for why that can differ from the JS wrapper
+  loading fine. `services/server-manager.ts`'s `syncInsecureCertAllowlist`
+  warns via `clogWarn('CERT', …)` when a server wants the flag but it's
+  unavailable; the server add/edit screens show a matching hint under the
+  toggle.
 
 ### Hooks (`hooks/`)
 
@@ -518,7 +524,10 @@ Pure and well-tested. **Put logic here whenever it doesn't need React.**
 and availability **FLOOR**, never round up) · `torrent-state.ts` (state → color/
 label, completion and ETA rules) · `limit-input.ts` (share-limit sentinels:
 `-2` = follow global, `-1` = unlimited; own-vs-effective limit resolution) ·
-`error.ts` (`getErrorMessage`) · `apiVersion.ts` (parse + `ApiFeatures` gating) ·
+`error.ts` (`getErrorMessage`, `isTlsRejection` — recognizes iOS rejecting a
+server's TLS certificate from the free-text error description RN's XHR
+bridge exposes, matched across all six locales since that text is localized
+to the device language — #256) · `apiVersion.ts` (parse + `ApiFeatures` gating) ·
 `connection-settings.ts` (`resolveConnectionSettings` — resolves the axios
 connection timeout / retry count from raw stored preferences, falling back to
 `DEFAULT_PREFERENCES` on missing or corrupt values while still honoring a
@@ -780,3 +789,15 @@ Keep entries factual and current; if you find one that's no longer true
   parameter "works" in the UI but has no visible server-side effect, check it
   against qBittorrent's `torrentscontroller.cpp` source, not the wiki — the
   wiki is not reliably kept in sync with parameter renames.
+- **A feature backed by a local Expo native module (`modules/*`) can be
+  rendered by an OTA update on a binary that predates that module, and the
+  JS wrapper no-ops silently instead of erroring.** OTA JS updates ship
+  independently of the native binary (`app.config.js`'s `runtimeVersion.policy:
+  'appVersion'` ties an OTA update to any binary on the same app version,
+  native code included or not), so a device can receive a feature's JS
+  without ever having its native half. `modules/insecure-cert-allowlist`
+  hit exactly this (#256): the toggle looked like it did nothing, with no
+  error anywhere. The fix is an explicit availability check
+  (`isInsecureCertAllowlistAvailable()`) that callers use to warn or hint in
+  the UI — don't assume a native module is present just because requiring it
+  didn't throw at JS-parse time.

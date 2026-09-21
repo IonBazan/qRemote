@@ -27,7 +27,7 @@ import { APP_VERSION } from '@/utils/version';
 import { getConnectivityLog, formatConnectivityLog } from '@/services/connectivity-log';
 import { logsApi } from '@/services/api/logs';
 import { apiClient } from '@/services/api/client';
-import { getErrorMessage } from '@/utils/error';
+import { getErrorMessage, isTlsRejection } from '@/utils/error';
 import { CustomHeaderPair, sanitizeCustomHeaders } from '@/utils/customHeaders';
 import { isLoginBodyFail, isLoginSuccess } from '@/utils/login-response';
 
@@ -65,6 +65,67 @@ const diagnosticHttp = axios.create({
   // same as fetch() never throwing based on HTTP status.
   validateStatus: () => true,
 });
+
+/** Minimal fetch()-`Response`-shaped result for the REACH probes below —
+ * only `status` is ever read off it. */
+interface ReachProbeResponse {
+  status: number;
+}
+
+/**
+ * Raw-XHR mirror of `fetch(url, { method, headers, signal })`, used only by
+ * the REACH probes (Feature 1 "Ping Host" and Step 1 of the full run below).
+ * Deliberately not routed through `diagnosticHttp` or the app's `apiClient`
+ * — the REACH step exists specifically to stay independent of the app's own
+ * HTTP stack (see this file's header comment).
+ *
+ * It replaces a plain `fetch()` call because RN's `whatwg-fetch` polyfill
+ * collapses every network-level failure — including a rejected TLS
+ * certificate — into a bare `TypeError('Network request failed')`
+ * (fetch.umd.js), discarding the native NSError's localizedDescription. That
+ * made the certificate-specific guidance below unreachable: every REACH
+ * failure looked like "Network request failed" regardless of cause. A raw
+ * XHR keeps the detail — RN's XHR bridge puts it in the response body on
+ * error — which is exactly how `utils/error.ts`'s `isTlsRejection` (also
+ * used by `services/api/client.ts`) tells a TLS rejection apart from a
+ * genuinely unreachable host.
+ */
+function reachProbeRequest(
+  url: string,
+  method: 'HEAD' | 'GET',
+  headers: Record<string, string>,
+  signal: AbortSignal,
+): Promise<ReachProbeResponse> {
+  return new Promise((resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error('Timed out after 15s'));
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    const onAbort = () => xhr.abort();
+    const cleanup = () => signal.removeEventListener('abort', onAbort);
+    signal.addEventListener('abort', onAbort);
+    xhr.open(method, url, true);
+    Object.entries(headers).forEach(([key, value]) => xhr.setRequestHeader(key, value));
+    xhr.onload = () => {
+      cleanup();
+      resolve({ status: xhr.status });
+    };
+    xhr.onabort = () => {
+      cleanup();
+      reject(new Error('Timed out after 15s'));
+    };
+    xhr.onerror = () => {
+      cleanup();
+      // Mirror axios's error shape (`error.request.response`) so
+      // isTlsRejection can read the native error description straight off it.
+      const err = new Error('Network request failed') as Error & { request?: XMLHttpRequest };
+      err.request = xhr;
+      reject(err);
+    };
+    xhr.send();
+  });
+}
 
 /** Reads the Set-Cookie value(s) off an axios response's headers, tolerant of
  * the array shape (duplicate headers) and casing quirks — mirrors the proven
@@ -325,21 +386,13 @@ export function SuperDebugPanel({
       const authHeader = buildAuthHeader();
       const reachHeaders: Record<string, string> = { ...buildCustomHeaders() };
       if (authHeader) reachHeaders['Authorization'] = authHeader;
-      let response: Response;
+      let response: ReachProbeResponse;
       try {
-        response = await fetch(url, {
-          method: 'HEAD',
-          headers: reachHeaders,
-          signal: controller.signal,
-        });
+        response = await reachProbeRequest(url, 'HEAD', reachHeaders, controller.signal);
       } catch {
         // Some servers reject HEAD — fall back to GET
         if (controller.signal.aborted) throw new Error('Timed out after 15s');
-        response = await fetch(url, {
-          method: 'GET',
-          headers: reachHeaders,
-          signal: controller.signal,
-        });
+        response = await reachProbeRequest(url, 'GET', reachHeaders, controller.signal);
       }
       const latency = Date.now() - start;
 
@@ -367,8 +420,19 @@ export function SuperDebugPanel({
       const msg = getErrorMessage(err) || 'Unknown error';
       addEntry('REACH', `Host unreachable after ${latency}ms`, 'error');
 
-      // Provide specific guidance based on error type
-      if (msg.includes('Network request failed') || msg.includes('Failed to connect')) {
+      // Provide specific guidance based on error type. The TLS check runs
+      // first: a rejected certificate reaches here as the same generic
+      // "Network request failed" text a genuinely unreachable host produces
+      // (see reachProbeRequest's onerror above), so isTlsRejection — which
+      // inspects the XHR's response body for the native error description
+      // rather than the generic message — is the only way to tell them apart.
+      if (isTlsRejection(err)) {
+        addEntry(
+          'WARN',
+          'The server was reached, but iOS rejected its TLS certificate. If you do not have HTTPS set up, turn off the "Use HTTPS" toggle. If you are intentionally using a self-signed certificate, enable "Allow Self-Signed Certificate" in the Security section above — trusting the certificate on this device alone is not enough for a third-party app to accept it.',
+          'warning',
+        );
+      } else if (msg.includes('Network request failed') || msg.includes('Failed to connect')) {
         addEntry(
           'WARN',
           'The device cannot reach the server at all. Possible causes:\n  1. IP address or domain is wrong\n  2. Server is off or qBittorrent is not running\n  3. Port is incorrect (qBittorrent default: 8080)\n  4. Firewall is blocking the connection\n  5. If remote: VPN/port forwarding not configured',
@@ -378,12 +442,6 @@ export function SuperDebugPanel({
         addEntry(
           'WARN',
           'Connection timed out. The server did not respond within 15 seconds. Possible causes:\n  1. Server is behind a firewall that silently drops packets\n  2. Wrong port (packets go nowhere)\n  3. Network latency too high (weak connection)',
-          'warning',
-        );
-      } else if (msg.includes('SSL') || msg.includes('certificate') || msg.includes('TLS')) {
-        addEntry(
-          'WARN',
-          'The server was reached, but iOS rejected its TLS certificate. If you do not have HTTPS set up, turn off the "Use HTTPS" toggle. If you are intentionally using a self-signed certificate, enable "Allow Self-Signed Certificate" in the Security section above — trusting the certificate on this device alone is not enough for a third-party app to accept it.',
           'warning',
         );
       } else {
@@ -521,20 +579,12 @@ export function SuperDebugPanel({
       }
 
       try {
-        let reachResp: Response;
+        let reachResp: ReachProbeResponse;
         try {
-          reachResp = await fetch(baseUrl, {
-            method: 'HEAD',
-            headers: diagHeaders,
-            signal: controller.signal,
-          });
+          reachResp = await reachProbeRequest(baseUrl, 'HEAD', diagHeaders, controller.signal);
         } catch {
           if (controller.signal.aborted) throw new Error('Timed out after 15s');
-          reachResp = await fetch(baseUrl, {
-            method: 'GET',
-            headers: diagHeaders,
-            signal: controller.signal,
-          });
+          reachResp = await reachProbeRequest(baseUrl, 'GET', diagHeaders, controller.signal);
         }
         clearTimeout(reachTimeout);
         const reachLatency = Date.now() - reachStart;
@@ -560,7 +610,16 @@ export function SuperDebugPanel({
         const msg = getErrorMessage(err) || 'Unknown error';
         addEntry('REACH', `FAILED — Server unreachable after ${reachLatency}ms`, 'error');
 
-        if (msg.includes('Network request failed') || msg.includes('Failed to connect')) {
+        // TLS check first — see the matching comment on the Feature 1 probe
+        // above; the same generic "Network request failed" text covers both
+        // a rejected certificate and a genuinely unreachable host here.
+        if (isTlsRejection(err)) {
+          addEntry(
+            'WARN',
+            'The server was reached, but iOS rejected its TLS certificate. If you do not have HTTPS configured, turn off the "Use HTTPS" toggle. If you are intentionally using a self-signed certificate, enable "Allow Self-Signed Certificate" in the Security section above — trusting the certificate on this device alone is not enough for a third-party app to accept it.',
+            'warning',
+          );
+        } else if (msg.includes('Network request failed') || msg.includes('Failed to connect')) {
           addEntry(
             'WARN',
             'Your device cannot establish a connection to this address.\n\nChecklist:\n  1. Is the IP/domain correct?\n  2. Is qBittorrent running with WebUI enabled?\n  3. Is the port correct? (default: 8080)\n  4. Is a firewall blocking the connection?\n  5. If accessing remotely: is port forwarding or VPN set up?\n  6. Try "Open WebUI" above to test in a browser.',
@@ -574,12 +633,6 @@ export function SuperDebugPanel({
           addEntry(
             'WARN',
             'The server did not respond within 15 seconds.\n\nThis usually means:\n  1. A firewall is silently dropping packets\n  2. The port is wrong (nothing is listening)\n  3. The server is too slow or overloaded\n\nTry "Open WebUI" above to verify in a browser.',
-            'warning',
-          );
-        } else if (msg.includes('SSL') || msg.includes('certificate') || msg.includes('TLS')) {
-          addEntry(
-            'WARN',
-            'The server was reached, but iOS rejected its TLS certificate. If you do not have HTTPS configured, turn off the "Use HTTPS" toggle. If you are intentionally using a self-signed certificate, enable "Allow Self-Signed Certificate" in the Security section above — trusting the certificate on this device alone is not enough for a third-party app to accept it.',
             'warning',
           );
         } else {

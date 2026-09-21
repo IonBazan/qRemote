@@ -49,6 +49,7 @@ class MockAxiosError extends Error {
   code?: string;
   config?: Record<string, unknown>;
   response?: { status?: number; data?: unknown; headers?: Record<string, unknown> };
+  request?: { response?: unknown };
   isAxiosError = true;
   constructor(message?: string) {
     super(message);
@@ -425,6 +426,26 @@ describe('apiClient', () => {
 
     it('normalizes ERR_NETWORK to connection timeout error', () => {
       const err = makeErr({ code: 'ERR_NETWORK' });
+      expect(() => capturedResponseInterceptorError!(err)).toThrow(
+        'Connection timeout. Please check your server connection.',
+      );
+    });
+
+    it('normalizes an ERR_NETWORK carrying a TLS-rejection description to a distinct certificate error (#256)', () => {
+      const err = makeErr({
+        code: 'ERR_NETWORK',
+        request: {
+          response:
+            'The certificate for this server is invalid. You might be connecting to a server that is pretending to be "example.com".',
+        },
+      });
+      expect(() => capturedResponseInterceptorError!(err)).toThrow(
+        'Certificate rejected. Enable "Allow Untrusted, Self-Signed Certificate" for this server if you trust it.',
+      );
+    });
+
+    it('does not mistake an ordinary ERR_NETWORK for a TLS rejection (#256)', () => {
+      const err = makeErr({ code: 'ERR_NETWORK', request: { response: '' } });
       expect(() => capturedResponseInterceptorError!(err)).toThrow(
         'Connection timeout. Please check your server connection.',
       );

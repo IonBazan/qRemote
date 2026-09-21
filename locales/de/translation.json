@@ -776,6 +776,7 @@
     "useHttps": "HTTPS verwenden",
     "allowInsecureCert": "Nicht vertrauenswürdiges, selbstsigniertes Zertifikat zulassen",
     "allowInsecureCertHint": "Akzeptiert das Zertifikat dieses Servers, auch wenn iOS ihm nicht vertraut. Aktiviere dies nur für einen Server, den du selbst kontrollierst — der Schutz vor einer gefälschten oder abgefangenen Verbindung entfällt dadurch.",
+    "allowInsecureCertUnavailable": "Erfordert die neueste Version aus dem App Store.",
     "authMethod": "Authentifizierungsmethode",
     "authMethodPassword": "Benutzername und Passwort",
     "authMethodApiKey": "API-Schlüssel",
