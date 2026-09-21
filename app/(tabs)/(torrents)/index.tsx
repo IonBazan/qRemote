@@ -55,6 +55,8 @@ import { spacing, borderRadius } from '@/constants/spacing';
 import { buttonStyles, buttonText } from '@/constants/buttons';
 import { typography } from '@/constants/typography';
 import { QuickConnectPanel } from '@/components/QuickConnectPanel';
+import { ServerSwitcherModal } from '@/components/ServerSwitcherModal';
+import { ServerIconBadge } from '@/components/ServerIconBadge';
 import { useTorrentActions } from '@/hooks/useTorrentActions';
 import { useGracefulError } from '@/hooks/useGracefulError';
 import { getErrorMessage } from '@/utils/error';
@@ -81,6 +83,7 @@ export default function TorrentsScreen() {
   } = useTorrents();
   const { graceError, isPendingError } = useGracefulError(error);
   const {
+    currentServer,
     isConnected,
     isLoading: serverIsLoading,
     isConnecting,
@@ -715,30 +718,30 @@ export default function TorrentsScreen() {
     },
   ];
 
-  // ─── Server quick-connect state (used in not-connected early return) ────────
+  // ─── Server quick-connect state (not-connected panel + the connected
+  // server switcher, #249 — both list the same saved servers) ────────────────
   const [savedServers, setSavedServers] = useState<ServerConfig[]>([]);
   const [serversLoaded, setServersLoaded] = useState(false);
   const [connectingId, setConnectingId] = useState<string | null>(null);
   const [connectErrors, setConnectErrors] = useState<Record<string, string>>({});
+  const [showServerSwitcher, setShowServerSwitcher] = useState(false);
 
-  // Refetch on every focus (not just isConnected changes) so an icon/color
-  // edited in Settings while still disconnected shows up when this screen
-  // regains focus, instead of only refreshing on the next connect/disconnect.
+  // Refetch on every focus, connected or not, so an icon/color edited in
+  // Settings shows up here next time this screen regains focus rather than
+  // only on the next connect/disconnect.
   useFocusEffect(
     useCallback(() => {
-      if (!isConnected) {
-        setServersLoaded(false);
-        ServerManager.getServers()
-          .then((s) => {
-            setSavedServers(s);
-            setServersLoaded(true);
-          })
-          .catch(() => {
-            setSavedServers([]);
-            setServersLoaded(true);
-          });
-      }
-    }, [isConnected]),
+      setServersLoaded(false);
+      ServerManager.getServers()
+        .then((s) => {
+          setSavedServers(s);
+          setServersLoaded(true);
+        })
+        .catch(() => {
+          setSavedServers([]);
+          setServersLoaded(true);
+        });
+    }, []),
   );
 
   const handleQuickConnect = useCallback(
@@ -1204,6 +1207,25 @@ export default function TorrentsScreen() {
           ]}
         >
           <View style={[styles.searchCard, { backgroundColor: 'transparent' }]}>
+            {/* Current server — opens the quick server switcher (#249) */}
+            {!selectMode && currentServer && (
+              <TouchableOpacity
+                style={styles.serverSwitcherRow}
+                onPress={() => {
+                  haptics.light();
+                  setShowServerSwitcher(true);
+                }}
+                activeOpacity={0.7}
+                accessibilityLabel={t('screens.torrents.switchServer')}
+              >
+                <ServerIconBadge server={currentServer} size={20} />
+                <Text style={[styles.serverSwitcherText, { color: colors.text }]} numberOfLines={1}>
+                  {currentServer.name}
+                </Text>
+                <Ionicons name="chevron-down" size={14} color={colors.textSecondary} />
+              </TouchableOpacity>
+            )}
+
             {/* Search bar with Sort button */}
             <View style={styles.searchRow}>
               {/* LEFT: Sort button — fixed 42×42 */}
@@ -2142,6 +2164,18 @@ export default function TorrentsScreen() {
             setListDeleteConfirm(null);
           }}
         />
+
+        <ServerSwitcherModal
+          visible={showServerSwitcher}
+          servers={savedServers}
+          currentServerId={currentServer?.id ?? null}
+          onSelectServer={connectToServer}
+          onManageServers={() => {
+            setShowServerSwitcher(false);
+            router.push('/settings/servers');
+          }}
+          onClose={() => setShowServerSwitcher(false)}
+        />
       </View>
     </>
   );
@@ -2323,6 +2357,21 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
     paddingBottom: spacing.xs,
   },
+  serverSwitcherRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.xs,
+    maxWidth: '100%',
+  },
+  serverSwitcherText: {
+    fontSize: 14,
+    fontWeight: '600',
+    flexShrink: 1,
+  },
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2387,7 +2436,9 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   listContent: {
-    paddingTop: 100,
+    // +36 over the skeleton's 100 to make room for the server-switcher row
+    // (#249) that only renders in this, the fully-connected header.
+    paddingTop: 136,
     paddingHorizontal: spacing.md,
     borderRadius: borderRadius.large,
   },

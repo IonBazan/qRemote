@@ -56,7 +56,10 @@
       "deselectAll": "Deseleccionar todo",
       "selectMode": "Seleccionar",
       "selectTorrent": "Seleccionar torrent",
-      "deselectTorrent": "Deseleccionar torrent"
+      "deselectTorrent": "Deseleccionar torrent",
+      "switchServer": "Cambiar Servidor",
+      "manageServers": "Administrar Servidores",
+      "currentServer": "Actual"
     },
     "addTorrent": {
       "none": "Ninguno",

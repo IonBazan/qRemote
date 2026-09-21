@@ -418,7 +418,12 @@ All PascalCase function components taking a `…Props` interface.
   `SavePathPickerModal` (filterable list of save paths already in use, derived
   from TorrentContext via `utils/save-paths.ts` — works on any qBittorrent
   version), `SearchCartModal` (review sheet for the Search tab's add queue —
-  list, per-item remove, Clear all, Checkout — see `SearchCartContext.tsx`).
+  list, per-item remove, Clear all, Checkout — see `SearchCartContext.tsx`),
+  `ServerSwitcherModal` (quick server switcher sheet, #249 — opened from a
+  compact badge+name in the torrents screen header; lists saved servers, marks
+  the connected one, taps another to call `connectToServer` directly; owns its
+  own transient switching-id/error state rather than threading it through the
+  screen, mirroring `QuickConnectPanel`'s row treatment).
 - **Torrent / search UI** — `TorrentCard` (`React.memo` with a **custom
   comparator — keep it in sync when you add a rendered field**, or the card
   silently stops updating; category/tag stickers use `categoryColors`/`tagColors`

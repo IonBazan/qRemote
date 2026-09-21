@@ -56,7 +56,10 @@
       "deselectAll": "取消全选",
       "selectMode": "选择",
       "selectTorrent": "选择种子",
-      "deselectTorrent": "取消选择种子"
+      "deselectTorrent": "取消选择种子",
+      "switchServer": "切换服务器",
+      "manageServers": "管理服务器",
+      "currentServer": "当前"
     },
     "addTorrent": {
       "none": "无",
