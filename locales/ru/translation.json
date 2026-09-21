@@ -77,7 +77,10 @@
       "deselectAll": "Снять выделение",
       "selectMode": "Выбрать",
       "selectTorrent": "Выбрать торрент",
-      "deselectTorrent": "Снять выбор торрента"
+      "deselectTorrent": "Снять выбор торрента",
+      "switchServer": "Сменить сервер",
+      "manageServers": "Управление серверами",
+      "currentServer": "Текущий"
     },
     "addTorrent": {
       "none": "Нет",
