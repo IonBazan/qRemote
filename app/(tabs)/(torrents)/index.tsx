@@ -110,6 +110,11 @@ export default function TorrentsScreen() {
   const [selectMode, setSelectMode] = useState(false);
   const [selectedHashes, setSelectedHashes] = useState<Set<string>>(new Set());
   const [bulkLoading, setBulkLoading] = useState(false);
+  // The bulk actions bar is absolutely positioned over the list (see
+  // bulkActionsBar), so without this the last card(s) render underneath it
+  // and are partially hidden. Measured rather than hardcoded since its height
+  // varies with the safe-area inset and Dynamic Type text scaling.
+  const [bulkActionsBarHeight, setBulkActionsBarHeight] = useState(0);
   const [bulkMenuVisible, setBulkMenuVisible] = useState(false);
   const [showBulkCategoryPicker, setShowBulkCategoryPicker] = useState(false);
   // Tag editing works as a draft: toggles accumulate in bulkTagDraft and are
@@ -178,6 +183,12 @@ export default function TorrentsScreen() {
   const headerTranslateY = useRef(new Animated.Value(0)).current;
   const isHeaderVisible = useRef(true);
   const isAnimating = useRef(false);
+  // headerContainer is an absolute overlay (see styles.headerContainer), so
+  // the list's paddingTop must reserve exactly its rendered height or content
+  // either hides underneath it or leaves a gap above the first card. Its
+  // content differs by selectMode (fewer buttons/rows), so this is measured
+  // rather than a fixed constant — matches bulkActionsBarHeight below.
+  const [headerHeight, setHeaderHeight] = useState(136);
 
   // Swipeable refs for closing open rows
   const openSwipeableRef = useRef<Swipeable | null>(null);
@@ -194,9 +205,9 @@ export default function TorrentsScreen() {
   // is focused.
   useFocusEffect(
     useCallback(() => {
-      setToastTopOffset(styles.listContent.paddingTop + spacing.xxl);
+      setToastTopOffset(headerHeight + spacing.xxl);
       return () => setToastTopOffset(null);
-    }, [setToastTopOffset]),
+    }, [setToastTopOffset, headerHeight]),
   );
 
   // Check for filter + card view mode preference changes on screen focus
@@ -936,9 +947,13 @@ export default function TorrentsScreen() {
     [refresh, showToast, t],
   );
 
-  // Scroll handler — header show/hide only
+  // Scroll handler — header show/hide only. Pinned (never hides) in
+  // selectMode: Select All / Close must stay reachable without scrolling
+  // back up, per #252-adjacent feedback.
   const handleScroll = useCallback(
     (event: { nativeEvent: { contentOffset: { y: number } } }) => {
+      if (selectMode) return;
+
       const currentScrollY = event.nativeEvent.contentOffset.y;
       const scrollDifference = currentScrollY - lastScrollY.current;
 
@@ -990,8 +1005,19 @@ export default function TorrentsScreen() {
 
       lastScrollY.current = currentScrollY;
     },
-    [headerTranslateY],
+    [headerTranslateY, selectMode],
   );
+
+  // Snap the header back to visible when entering selectMode — it may have
+  // been scrolled out of view before selection started, and while selected
+  // it must stay pinned (handleScroll no-ops during selectMode above).
+  useEffect(() => {
+    if (selectMode) {
+      isHeaderVisible.current = true;
+      isAnimating.current = false;
+      headerTranslateY.setValue(0);
+    }
+  }, [selectMode, headerTranslateY]);
 
   // Whether any secondary (category/tag) filter is active
   const hasSecondaryFilter = categoryFilter !== null || tagFilters.length > 0;
@@ -1198,8 +1224,16 @@ export default function TorrentsScreen() {
       <FocusAwareStatusBar barStyle={isDark ? 'light-content' : 'dark-content'} />
       <View style={[styles.container, { backgroundColor: colors.background }]}>
         <Animated.View
+          onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
           style={[
             styles.headerContainer,
+            // In selectMode the header is pinned (see the selectMode effect
+            // above) — switch it from an absolute overlay to a normal in-flow
+            // sibling so it physically pushes the list down instead of
+            // floating on top of it. Cards can only render underneath it (as
+            // in normal browsing, by design) when it's an overlay; pinned +
+            // overlay together is exactly the overlap this avoids.
+            selectMode && styles.headerContainerPinned,
             {
               backgroundColor: 'transparent',
               transform: [{ translateY: headerTranslateY }],
@@ -1624,7 +1658,7 @@ export default function TorrentsScreen() {
           <FlatList
             data={filteredTorrents}
             keyExtractor={(item) => item.hash}
-            style={{ backgroundColor: colors.background }}
+            style={{ flex: 1, backgroundColor: colors.background }}
             renderItem={({ item }) => {
               const itemIsPaused =
                 item.state === 'pausedDL' ||
@@ -1855,7 +1889,15 @@ export default function TorrentsScreen() {
                 tintColor={colors.primary}
               />
             }
-            contentContainerStyle={styles.listContent}
+            contentContainerStyle={[
+              styles.listContent,
+              // Only the absolute-overlay (non-selectMode) header needs the
+              // list content pushed down by its height — in selectMode the
+              // header is a normal in-flow sibling (see headerContainerPinned)
+              // and already occupies that space in the layout itself.
+              selectMode ? { paddingTop: spacing.sm } : { paddingTop: headerHeight },
+              selectMode && selectedHashes.size > 0 && { paddingBottom: bulkActionsBarHeight },
+            ]}
             onScroll={handleScroll}
             scrollEventThrottle={50}
             removeClippedSubviews={false}
@@ -1867,6 +1909,7 @@ export default function TorrentsScreen() {
 
         {selectMode && selectedHashes.size > 0 && (
           <View
+            onLayout={(e) => setBulkActionsBarHeight(e.nativeEvent.layout.height)}
             style={[
               styles.bulkActionsBar,
               { backgroundColor: colors.surface, borderTopColor: colors.surfaceOutline },
@@ -2351,6 +2394,13 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 1000,
   },
+  // Cancels the absolute positioning above — see its usage in selectMode.
+  headerContainerPinned: {
+    position: 'relative',
+    top: undefined,
+    left: undefined,
+    right: undefined,
+  },
   searchCard: {
     borderRadius: borderRadius.medium,
     paddingHorizontal: spacing.md,
@@ -2436,9 +2486,8 @@ const styles = StyleSheet.create({
     opacity: 0.5,
   },
   listContent: {
-    // +36 over the skeleton's 100 to make room for the server-switcher row
-    // (#249) that only renders in this, the fully-connected header.
-    paddingTop: 136,
+    // paddingTop is applied dynamically (see headerHeight) — headerContainer
+    // is an absolute overlay whose height varies with selectMode.
     paddingHorizontal: spacing.md,
     borderRadius: borderRadius.large,
   },

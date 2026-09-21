@@ -113,19 +113,25 @@ export function LogViewer({ visible, onClose, onClear, refreshTrigger }: LogView
               { borderBottomColor: colors.surfaceOutline, backgroundColor: colors.surface },
             ]}
           >
-            <Text style={[styles.title, { color: colors.text }]}>
+            <Text
+              style={[styles.title, { color: colors.text }]}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+            >
               {t('screens.settings.logsTitle')}
             </Text>
             <View style={styles.headerButtons}>
               <TouchableOpacity
                 onPress={handleCopy}
-                style={[styles.copyButton, { backgroundColor: colors.primary }]}
+                style={styles.copyButton}
                 disabled={logs.length === 0}
+                accessibilityLabel={t('common.copy')}
               >
-                <Ionicons name="copy-outline" size={20} color={colors.onAccent} />
-                <Text style={[styles.copyButtonText, { color: colors.onAccent }]}>
-                  {t('common.copy')}
-                </Text>
+                <Ionicons
+                  name="copy-outline"
+                  size={20}
+                  color={logs.length === 0 ? colors.textSecondary : colors.primary}
+                />
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={handleClear}
@@ -234,23 +240,17 @@ const styles = StyleSheet.create({
     ...typography.h2,
     fontSize: 24,
     fontWeight: '700',
+    flexShrink: 1,
+    marginRight: spacing.sm,
   },
   headerButtons: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
+    flexShrink: 0,
   },
   copyButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: borderRadius.small,
-  },
-  copyButtonText: {
-    ...typography.bodyMedium,
-    fontWeight: '600',
+    padding: 8,
   },
   clearButton: {
     flexDirection: 'row',
