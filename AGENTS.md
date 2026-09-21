@@ -328,7 +328,7 @@ Complete map. Trust it.
 | `app/(tabs)/(torrents)/` | Torrents tab as a nested stack: `index` list, `torrent/[hash]`, `torrent/files`, `torrent/manage-trackers`. Group is omitted from URLs → `/`, `/torrent/[hash]`. |
 | `app/(tabs)/search.tsx` | Search tab: job polling UI, plugin/category/indexer filter chips, client-side sort, collapsing header. Optional auto-tag-by-tracker on add (`autoCategorizeByTracker` pref — tags Search downloads only; the key name is historical). |
 | `app/(tabs)/transfer.tsx` | Transfer stats, global speed and seeding limits. |
-| `app/(tabs)/logs.tsx` | Connectivity logs. `href: null` — reached from Settings → Advanced, not a visible tab. |
+| `app/(tabs)/logs.tsx` | qBittorrent's own server-side application + peer log viewer (`logs/main`, `logs/peers` via `services/api/logs.ts`) — needs a live connection, shows a "not connected" placeholder otherwise. `href: null` — reached from Settings → Advanced ("Server Logs" row), not a visible tab. Not the app's own connectivity/diagnostic log — see `components/LogViewer.tsx` for that. |
 | `app/(tabs)/rss/` | RSS Feeds tab (`index` tree + `feed` detail). `href` is null until connected **and** the server's `rss_processing_enabled` is on. Rules and settings screens do **not** go here — they live under Settings. |
 | `app/(tabs)/settings/` | Settings tab as a nested stack. See sub-screens below. |
 | `app/(tabs)/_layout.tsx` | Tab bar and tab gating. |
@@ -446,7 +446,11 @@ All PascalCase function components taking a `…Props` interface.
 - **Visuals** — `SpeedGraph`, `CircularProgress`, `AnimatedProgressBar`,
   `AnimatedButton`, `Confetti`.
 - **Chrome / diagnostics** — `FocusAwareStatusBar`, `SettingRow`,
-  `QuickConnectPanel`, `LogViewer`, `DebugRow`, `SuperDebugPanel`.
+  `QuickConnectPanel`, `LogViewer` (modal viewer for the app's own in-memory
+  connectivity log, `services/connectivity-log.ts` — copy-to-clipboard via
+  `formatConnectivityLog()`; opened from Settings → Advanced's "View
+  Connectivity Logs" row; works with no live server connection, unlike
+  `app/(tabs)/logs.tsx`), `DebugRow`, `SuperDebugPanel`.
 
 ### API wrappers (`services/api/`)
 
@@ -480,8 +484,8 @@ Thin objects over `apiClient`.
   before the iOS security-scoped access can lapse.
 - **`query-client.ts`** — the shared TanStack `QueryClient`.
 - **`color-theme-manager.ts`** — save/load/apply user color themes.
-- **`connectivity-log.ts`** — in-memory ring log (`clogDebug/Info/Warn/Error(tag, msg)`).
-- **`log-storage.ts`** — persisted entries for the Logs screen.
+- **`connectivity-log.ts`** — in-memory ring log (`clogDebug/Info/Warn/Error(tag, msg)`),
+  displayed by `components/LogViewer.tsx`.
 
 ### Native modules (`modules/`)
 
@@ -806,3 +810,9 @@ Keep entries factual and current; if you find one that's no longer true
   (`isInsecureCertAllowlistAvailable()`) that callers use to warn or hint in
   the UI — don't assume a native module is present just because requiring it
   didn't throw at JS-parse time.
+- **"View Connectivity Logs" used to open qBittorrent's own server-log
+  viewer** (`app/(tabs)/logs.tsx`), which needs a live connection and shows
+  nothing when the app can't connect — exactly the scenario it's needed for
+  (issue #256). The app's real diagnostic trail (`services/connectivity-log.ts`)
+  was never wired to any screen; it's now shown by `components/LogViewer.tsx`,
+  opened from its own "View Connectivity Logs" row in Settings → Advanced.
