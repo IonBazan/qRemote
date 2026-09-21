@@ -76,7 +76,7 @@ describe('LogViewer', () => {
   it('copies the formatted log to the clipboard when Copy is pressed', async () => {
     await render(<LogViewer visible onClose={jest.fn()} />);
 
-    await fireEvent.press(screen.getByText('common.copy'));
+    await fireEvent.press(screen.getByLabelText('common.copy'));
 
     expect(mockFormatConnectivityLog).toHaveBeenCalled();
     expect(Clipboard.setStringAsync).toHaveBeenCalledWith('formatted log output');
@@ -87,7 +87,7 @@ describe('LogViewer', () => {
     (Clipboard.setStringAsync as jest.Mock).mockRejectedValueOnce(new Error('fail'));
     await render(<LogViewer visible onClose={jest.fn()} />);
 
-    await fireEvent.press(screen.getByText('common.copy'));
+    await fireEvent.press(screen.getByLabelText('common.copy'));
 
     expect(mockShowToast).toHaveBeenCalledWith('errors.failedToCopyLog', 'error');
   });

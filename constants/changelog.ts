@@ -19,6 +19,27 @@ export interface ChangelogRelease {
 }
 export const CHANGELOG: ChangelogRelease[] = [
   {
+    version: '3.8.45',
+    date: '2026-09-21',
+    sections: [
+      {
+        title: 'New Features',
+        items: ['Added a quick server switcher to jump between saved servers'],
+      },
+      {
+        title: 'Bugs Fixed',
+        items: [
+          'Fixed ETA being hidden while seeding or checking a completed torrent',
+          'Fixed requests hanging for up to two minutes when the server becomes unreachable',
+          'Fixed Disconnect not working when the server is unreachable',
+          'Fixed the screen flashing when connecting to a server from the not-connected screen',
+          'Fixed RSS feed articles displaying in random order instead of newest first',
+          'Fixed the connectivity logs screen not showing anything useful',
+        ],
+      },
+    ],
+  },
+  {
     version: '3.8.44',
     date: '2026-09-09',
     sections: [
