@@ -40,7 +40,7 @@ import { shadows } from '@/constants/shadows';
 import { typography } from '@/constants/typography';
 import { getErrorMessage } from '@/utils/error';
 import { haptics } from '@/utils/haptics';
-import { toSearchQuery } from '@/utils/rss';
+import { sortArticlesByDateDesc, toSearchQuery } from '@/utils/rss';
 
 export default function RssFeedArticlesScreen() {
   const { t } = useTranslation();
@@ -64,7 +64,7 @@ export default function RssFeedArticlesScreen() {
   const [bulkLoading, setBulkLoading] = useState(false);
 
   const feed = useMemo(() => feeds.find((f) => f.path === itemPath)?.feed, [feeds, itemPath]);
-  const articles = useMemo(() => feed?.articles ?? [], [feed]);
+  const articles = useMemo(() => sortArticlesByDateDesc(feed?.articles ?? []), [feed]);
 
   // ────────────────────────────────────────────────── actions ─────────────
 

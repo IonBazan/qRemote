@@ -328,7 +328,7 @@ Complete map. Trust it.
 | `app/(tabs)/(torrents)/` | Torrents tab as a nested stack: `index` list, `torrent/[hash]`, `torrent/files`, `torrent/manage-trackers`. Group is omitted from URLs → `/`, `/torrent/[hash]`. |
 | `app/(tabs)/search.tsx` | Search tab: job polling UI, plugin/category/indexer filter chips, client-side sort, collapsing header. Optional auto-tag-by-tracker on add (`autoCategorizeByTracker` pref — tags Search downloads only; the key name is historical). |
 | `app/(tabs)/transfer.tsx` | Transfer stats, global speed and seeding limits. |
-| `app/(tabs)/logs.tsx` | Connectivity logs. `href: null` — reached from Settings → Advanced, not a visible tab. |
+| `app/(tabs)/logs.tsx` | qBittorrent's own server-side application + peer log viewer (`logs/main`, `logs/peers` via `services/api/logs.ts`) — needs a live connection, shows a "not connected" placeholder otherwise. `href: null` — reached from Settings → Advanced ("Server Logs" row), not a visible tab. Not the app's own connectivity/diagnostic log — see `components/LogViewer.tsx` for that. |
 | `app/(tabs)/rss/` | RSS Feeds tab (`index` tree + `feed` detail). `href` is null until connected **and** the server's `rss_processing_enabled` is on. Rules and settings screens do **not** go here — they live under Settings. |
 | `app/(tabs)/settings/` | Settings tab as a nested stack. See sub-screens below. |
 | `app/(tabs)/_layout.tsx` | Tab bar and tab gating. |
@@ -418,7 +418,12 @@ All PascalCase function components taking a `…Props` interface.
   `SavePathPickerModal` (filterable list of save paths already in use, derived
   from TorrentContext via `utils/save-paths.ts` — works on any qBittorrent
   version), `SearchCartModal` (review sheet for the Search tab's add queue —
-  list, per-item remove, Clear all, Checkout — see `SearchCartContext.tsx`).
+  list, per-item remove, Clear all, Checkout — see `SearchCartContext.tsx`),
+  `ServerSwitcherModal` (quick server switcher sheet, #249 — opened from a
+  compact badge+name in the torrents screen header; lists saved servers, marks
+  the connected one, taps another to call `connectToServer` directly; owns its
+  own transient switching-id/error state rather than threading it through the
+  screen, mirroring `QuickConnectPanel`'s row treatment).
 - **Torrent / search UI** — `TorrentCard` (`React.memo` with a **custom
   comparator — keep it in sync when you add a rendered field**, or the card
   silently stops updating; category/tag stickers use `categoryColors`/`tagColors`
@@ -441,7 +446,11 @@ All PascalCase function components taking a `…Props` interface.
 - **Visuals** — `SpeedGraph`, `CircularProgress`, `AnimatedProgressBar`,
   `AnimatedButton`, `Confetti`.
 - **Chrome / diagnostics** — `FocusAwareStatusBar`, `SettingRow`,
-  `QuickConnectPanel`, `LogViewer`, `DebugRow`, `SuperDebugPanel`.
+  `QuickConnectPanel`, `LogViewer` (modal viewer for the app's own in-memory
+  connectivity log, `services/connectivity-log.ts` — copy-to-clipboard via
+  `formatConnectivityLog()`; opened from Settings → Advanced's "View
+  Connectivity Logs" row; works with no live server connection, unlike
+  `app/(tabs)/logs.tsx`), `DebugRow`, `SuperDebugPanel`.
 
 ### API wrappers (`services/api/`)
 
@@ -475,8 +484,8 @@ Thin objects over `apiClient`.
   before the iOS security-scoped access can lapse.
 - **`query-client.ts`** — the shared TanStack `QueryClient`.
 - **`color-theme-manager.ts`** — save/load/apply user color themes.
-- **`connectivity-log.ts`** — in-memory ring log (`clogDebug/Info/Warn/Error(tag, msg)`).
-- **`log-storage.ts`** — persisted entries for the Logs screen.
+- **`connectivity-log.ts`** — in-memory ring log (`clogDebug/Info/Warn/Error(tag, msg)`),
+  displayed by `components/LogViewer.tsx`.
 
 ### Native modules (`modules/`)
 
@@ -491,7 +500,13 @@ Thin objects over `apiClient`.
   `services/server-manager.ts`); every other host and every non-server-trust
   challenge (Basic Auth, client cert) falls through to default handling
   unchanged. iOS only; requires `npm run xcode` to pick up (new native code,
-  not just a generated-file patch).
+  not just a generated-file patch). `isInsecureCertAllowlistAvailable()` (#256)
+  reports whether the native side is actually present in the running binary —
+  see [§10 Gotchas](#10-gotchas) for why that can differ from the JS wrapper
+  loading fine. `services/server-manager.ts`'s `syncInsecureCertAllowlist`
+  warns via `clogWarn('CERT', …)` when a server wants the flag but it's
+  unavailable; the server add/edit screens show a matching hint under the
+  toggle.
 
 ### Hooks (`hooks/`)
 
@@ -518,7 +533,10 @@ Pure and well-tested. **Put logic here whenever it doesn't need React.**
 and availability **FLOOR**, never round up) · `torrent-state.ts` (state → color/
 label, completion and ETA rules) · `limit-input.ts` (share-limit sentinels:
 `-2` = follow global, `-1` = unlimited; own-vs-effective limit resolution) ·
-`error.ts` (`getErrorMessage`) · `apiVersion.ts` (parse + `ApiFeatures` gating) ·
+`error.ts` (`getErrorMessage`, `isTlsRejection` — recognizes iOS rejecting a
+server's TLS certificate from the free-text error description RN's XHR
+bridge exposes, matched across all six locales since that text is localized
+to the device language — #256) · `apiVersion.ts` (parse + `ApiFeatures` gating) ·
 `connection-settings.ts` (`resolveConnectionSettings` — resolves the axios
 connection timeout / retry count from raw stored preferences, falling back to
 `DEFAULT_PREFERENCES` on missing or corrupt values while still honoring a
@@ -780,3 +798,21 @@ Keep entries factual and current; if you find one that's no longer true
   parameter "works" in the UI but has no visible server-side effect, check it
   against qBittorrent's `torrentscontroller.cpp` source, not the wiki — the
   wiki is not reliably kept in sync with parameter renames.
+- **A feature backed by a local Expo native module (`modules/*`) can be
+  rendered by an OTA update on a binary that predates that module, and the
+  JS wrapper no-ops silently instead of erroring.** OTA JS updates ship
+  independently of the native binary (`app.config.js`'s `runtimeVersion.policy:
+  'appVersion'` ties an OTA update to any binary on the same app version,
+  native code included or not), so a device can receive a feature's JS
+  without ever having its native half. `modules/insecure-cert-allowlist`
+  hit exactly this (#256): the toggle looked like it did nothing, with no
+  error anywhere. The fix is an explicit availability check
+  (`isInsecureCertAllowlistAvailable()`) that callers use to warn or hint in
+  the UI — don't assume a native module is present just because requiring it
+  didn't throw at JS-parse time.
+- **"View Connectivity Logs" used to open qBittorrent's own server-log
+  viewer** (`app/(tabs)/logs.tsx`), which needs a live connection and shows
+  nothing when the app can't connect — exactly the scenario it's needed for
+  (issue #256). The app's real diagnostic trail (`services/connectivity-log.ts`)
+  was never wired to any screen; it's now shown by `components/LogViewer.tsx`,
+  opened from its own "View Connectivity Logs" row in Settings → Advanced.

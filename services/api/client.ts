@@ -7,6 +7,7 @@ import axios, { AxiosInstance, AxiosError, AxiosHeaders, InternalAxiosRequestCon
 import { ServerConfig } from '@/types/api';
 import { clogDebug, clogInfo, clogWarn, clogError } from '@/services/connectivity-log';
 import { ApiFeatures, getApiFeatures } from '@/utils/apiVersion';
+import { isTlsRejection } from '@/utils/error';
 import { basicAuthHeader } from '@/utils/basicAuth';
 import { isReservedHeaderName } from '@/utils/customHeaders';
 
@@ -50,6 +51,18 @@ class ApiClient {
    * on the new connect.
    */
   private sessionEpoch: number = 0;
+
+  /**
+   * Aborts every in-flight request relying on the session-scoped signal —
+   * i.e. every call whose caller didn't pass its own `AbortSignal` — and is
+   * itself the signal handed to those calls by default (see `get`/`post`/
+   * `postFormData`/`postUrlEncoded`). Replaced (not just aborted) on every
+   * session teardown so the *next* request isn't dead on arrival. Without
+   * this, a request against a now-unreachable server had nothing to cancel
+   * it: disconnect() had to wait out a full logout POST, and a stale poll
+   * could land long after the app had moved on (#254).
+   */
+  private sessionController: AbortController = new AbortController();
 
   constructor() {
     this.client = axios.create({
@@ -231,8 +244,36 @@ class ApiClient {
 
         // Handle network errors
         if (error.code === 'ECONNABORTED' || error.code === 'ERR_NETWORK') {
+          // iOS's TLS-certificate rejection (NSURLErrorServerCertificateUntrusted,
+          // -1202, and friends) surfaces here too — as a plain ERR_NETWORK with
+          // no distinguishing code (#256). Without this, a rejected self-signed
+          // certificate is indistinguishable from a genuinely dead server, so
+          // nobody can tell what's wrong from the app alone. isTlsRejection reads
+          // the native error description RN stashes on the XHR (see utils/error.ts)
+          // to tell the two apart. This is a *new*, separate message — do not fold
+          // it into 'Connection timeout...' below, which callers substring-match.
+          if (isTlsRejection(error)) {
+            clogWarn('TLS', `Certificate rejected — ${reqUrl}`);
+            throw apiError(
+              'Certificate rejected. Enable "Allow Untrusted, Self-Signed Certificate" for this server if you trust it.',
+              status,
+            );
+          }
           clogError('HTTP', `Network error (${error.code}) — ${reqUrl}`);
           throw apiError('Connection timeout. Please check your server connection.', status);
+        }
+
+        // A request we cancelled ourselves — session teardown (setServer,
+        // clearCookies) or an explicit abortInFlight() (disconnect, server
+        // switch). Give it its own identifiable message rather than falling
+        // into the generic branch below and surfacing as "canceled": it must
+        // never be retried (isRetriableError doesn't match ERR_CANCELED) and
+        // must never look like a real failure to callers — deliberately kept
+        // out of RECONNECTABLE_MESSAGES (hooks/useReactiveReconnect.ts) so it
+        // can't trigger a reconnect or flash error UI.
+        if (error.code === 'ERR_CANCELED') {
+          clogDebug('HTTP', `Request canceled — ${reqUrl}`);
+          throw apiError('Request canceled.', status);
         }
 
         // Handle other errors
@@ -279,6 +320,7 @@ class ApiClient {
       this.apiVersion = null;
       this.cachedFeatures = null;
       this.sessionEpoch++;
+      this.abortInFlight();
     }
     this.currentServer = server;
     if (server) {
@@ -295,10 +337,25 @@ class ApiClient {
   clearCookies() {
     this.cookies = '';
     this.sessionEpoch++;
+    this.abortInFlight();
   }
 
   getCookies(): string {
     return this.cookies;
+  }
+
+  /**
+   * Cancels every in-flight request that's relying on the session-scoped
+   * signal (any `get`/`post`/`postFormData`/`postUrlEncoded` call whose
+   * caller didn't pass its own `AbortSignal`) and starts a fresh session so
+   * the next request isn't dead on arrival. Called automatically by
+   * `setServer`/`clearCookies` on every session teardown, and directly by
+   * `ServerManager.disconnect()` so a hung request against an unreachable
+   * server can't make disconnect feel unresponsive (#254).
+   */
+  abortInFlight(): void {
+    this.sessionController.abort();
+    this.sessionController = new AbortController();
   }
 
   /**
@@ -320,7 +377,7 @@ class ApiClient {
     this.cookies = Array.from(jar.values()).join('; ');
   }
 
-  async postFormData(url: string, data: FormData): Promise<unknown> {
+  async postFormData(url: string, data: FormData, signal?: AbortSignal): Promise<unknown> {
     if (!this.currentServer) {
       throw new Error('No server configured');
     }
@@ -330,7 +387,10 @@ class ApiClient {
       headers.set('Cookie', this.cookies);
     }
 
-    const response = await this.client.post(url, data, { headers });
+    const response = await this.client.post(url, data, {
+      headers,
+      signal: signal ?? this.sessionController.signal,
+    });
     return response.data;
   }
 
@@ -355,7 +415,9 @@ class ApiClient {
     const body = params.join('&');
 
     // Let the interceptor handle headers (it already sets Content-Type) and baseURL
-    const response = await this.client.post(url, body, { signal });
+    const response = await this.client.post(url, body, {
+      signal: signal ?? this.sessionController.signal,
+    });
     return response.data;
   }
 
@@ -371,19 +433,45 @@ class ApiClient {
     return error instanceof Error && error.message.includes('timeout');
   }
 
-  private async withRetry<T>(fn: () => Promise<T>): Promise<T> {
+  /**
+   * `connectionTimeout` (`this.client.defaults.timeout`) is a total budget
+   * for the whole logical request, not a per-attempt allowance — otherwise
+   * up to `retryAttempts + 1` attempts each waiting out the full timeout,
+   * plus backoff between them, turned one GET against a dead server into
+   * ~43s (and, with TanStack's own query-level retry on top, ~2 minutes)
+   * before anything surfaced (#254). A floor keeps the last attempt in a
+   * near-exhausted budget from being handed ~0ms.
+   */
+  private static readonly ATTEMPT_TIMEOUT_FLOOR_MS = 1000;
+
+  private async withRetry<T>(fn: (timeoutMs: number) => Promise<T>): Promise<T> {
+    const totalBudgetMs = this.client.defaults.timeout || 10000;
+    const deadline = Date.now() + totalBudgetMs;
     let lastError: unknown;
+
     for (let attempt = 0; attempt <= this.retryAttempts; attempt++) {
+      const remainingBeforeAttempt = deadline - Date.now();
+      if (attempt > 0 && remainingBeforeAttempt <= 0) {
+        throw lastError;
+      }
+      const attemptTimeout = Math.max(ApiClient.ATTEMPT_TIMEOUT_FLOOR_MS, remainingBeforeAttempt);
+
       try {
-        return await fn();
+        return await fn(attemptTimeout);
       } catch (error: unknown) {
         lastError = error;
-        if (attempt < this.retryAttempts && this.isRetriableError(error)) {
-          await new Promise((resolve) => setTimeout(resolve, 500 * (attempt + 1)));
-          clogWarn('HTTP', `Retrying request (attempt ${attempt + 1}/${this.retryAttempts})...`);
-          continue;
+        if (attempt >= this.retryAttempts || !this.isRetriableError(error)) {
+          throw error;
         }
-        throw error;
+        const backoff = 500 * (attempt + 1);
+        const remainingAfterFailure = deadline - Date.now();
+        if (remainingAfterFailure <= backoff) {
+          // The backoff sleep alone would blow the budget — stop now rather
+          // than sleep past it and retry anyway.
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, backoff));
+        clogWarn('HTTP', `Retrying request (attempt ${attempt + 1}/${this.retryAttempts})...`);
       }
     }
     throw lastError;
@@ -398,8 +486,13 @@ class ApiClient {
       throw new Error('No server configured');
     }
 
-    return this.withRetry(async () => {
-      const response = await this.client.get(url, { params, signal });
+    const effectiveSignal = signal ?? this.sessionController.signal;
+    return this.withRetry(async (timeoutMs) => {
+      const response = await this.client.get(url, {
+        params,
+        signal: effectiveSignal,
+        timeout: timeoutMs,
+      });
       return response.data;
     });
   }
@@ -409,7 +502,9 @@ class ApiClient {
       throw new Error('No server configured');
     }
 
-    const response = await this.client.post(url, data, { signal });
+    const response = await this.client.post(url, data, {
+      signal: signal ?? this.sessionController.signal,
+    });
     return response.data;
   }
 }
